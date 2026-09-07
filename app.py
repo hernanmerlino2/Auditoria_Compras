@@ -370,7 +370,20 @@ def seccion_usuarios(engine):
 # APP PRINCIPAL
 # ---------------------------------------------------------------------------
 
+def preparar_base_demo():
+    """
+    Para el demo en la nube: si la base de trabajo no existe pero hay una
+    base semilla (demo_seed.db) en el repo, la copia. Así la app arranca
+    siempre con los datos de demo cargados, sin depender de que alguien
+    los cargue a mano (y sin subir la base de trabajo al repo).
+    """
+    import os, shutil
+    if not os.path.exists(RUTA_DB) and os.path.exists("demo_seed.db"):
+        shutil.copy("demo_seed.db", RUTA_DB)
+
+
 def main():
+    preparar_base_demo()
     engine = crear_engine(RUTA_DB)
     crear_esquema(engine)
     crear_usuario_admin_si_no_hay(engine)
