@@ -372,14 +372,39 @@ def seccion_usuarios(engine):
 
 def preparar_base_demo():
     """
-    Para el demo en la nube: si la base de trabajo no existe pero hay una
-    base semilla (demo_seed.db) en el repo, la copia. Así la app arranca
-    siempre con los datos de demo cargados, sin depender de que alguien
-    los cargue a mano (y sin subir la base de trabajo al repo).
+    Para el demo en la nube: si la base no tiene datos, los carga desde los
+    CSV comprimidos de la carpeta demo_data/. Se usa CSV (texto) en vez de un
+    .db binario porque los binarios se corrompen al subirse a GitHub por la web.
+    Solo corre una vez: si ya hay compras cargadas, no hace nada.
     """
-    import os, shutil
-    if not os.path.exists(RUTA_DB) and os.path.exists("demo_seed.db"):
-        shutil.copy("demo_seed.db", RUTA_DB)
+    import os
+    import pandas as pd
+    from esquema import crear_engine, crear_esquema
+
+    engine = crear_engine(RUTA_DB)
+    crear_esquema(engine)
+
+    # ¿ya hay datos? entonces no recargar
+    try:
+        n = pd.read_sql("SELECT COUNT(*) AS n FROM compra_linea", engine)["n"].iloc[0]
+        if n and n > 0:
+            return
+    except Exception:
+        pass
+
+    carpeta = "demo_data"
+    if not os.path.isdir(carpeta):
+        return  # sin datos de demo; la app arranca vacía (modo real)
+
+    # orden de carga respetando dependencias (empresa antes que sus hijos)
+    tablas = ["empresa", "proveedor", "articulo", "carga_archivo",
+              "compra_linea", "gasto_vario", "precio_historico"]
+    for t in tablas:
+        ruta = os.path.join(carpeta, f"{t}.csv.gz")
+        if os.path.exists(ruta):
+            df = pd.read_csv(ruta, compression="gzip")
+            if not df.empty:
+                df.to_sql(t, engine, if_exists="append", index=False)
 
 
 def main():
