@@ -566,4 +566,5 @@ def main():
 if __name__ == "__main__":
     main()
 
-   # forzar recarga
+ # forzar recarga
+ # v2 - soporte csv y usuario de carga
