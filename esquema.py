@@ -117,6 +117,7 @@ class CargaArchivo(Base):
     id_carga = Column(Integer, primary_key=True, autoincrement=True)
     id_empresa = Column(Integer, ForeignKey("empresa.id_empresa"), nullable=False)
     id_usuario = Column(Integer, ForeignKey("usuario.id_usuario"), nullable=True)
+    usuario_carga = Column(String(120))  # nombre del usuario que cargó (texto)
     nombre_archivo = Column(String(300), nullable=False)
     hash_archivo = Column(String(64))  # para detectar recarga del MISMO archivo
     fecha_carga = Column(DateTime, default=datetime.utcnow)
@@ -156,10 +157,15 @@ class CompraLinea(Base):
     t_comp = Column(String(20))
     n_comp = Column(String(50))
     f_comp = Column(Date)
+    item_flexxus = Column(String(20))   # nº de ítem dentro del comprobante (CSV real)
 
     # control
     hash_linea = Column(String(32), nullable=False)  # clave de negocio anti-duplicados
     motivo_alerta = Column(String(200))
+
+    # trazabilidad de carga: quién subió este registro y cuándo
+    usuario_carga = Column(String(120))
+    fecha_carga = Column(String(30))
 
     # el hash de negocio es único por empresa: frena recargar la misma línea
     __table_args__ = (
@@ -187,7 +193,10 @@ class GastoVario(Base):
     t_comp = Column(String(20))
     n_comp = Column(String(50))
     f_comp = Column(Date)
+    item_flexxus = Column(String(20))
     hash_linea = Column(String(32), nullable=False)
+    usuario_carga = Column(String(120))
+    fecha_carga = Column(String(30))
 
     __table_args__ = (
         UniqueConstraint("id_empresa", "hash_linea", name="uq_gasto_empresa_hash"),

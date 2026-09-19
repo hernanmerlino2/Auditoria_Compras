@@ -87,7 +87,8 @@ def obtener_o_crear_empresa(session, nombre, cuit=None):
     return emp
 
 
-def cargar(ruta_limpio, ruta_gastos, nombre_empresa, ruta_db, id_usuario=None):
+def cargar(ruta_limpio, ruta_gastos, nombre_empresa, ruta_db,
+           id_usuario=None, usuario_carga=None):
     engine = crear_engine(ruta_db)
     crear_esquema(engine)
     session = get_session(engine)
@@ -98,6 +99,9 @@ def cargar(ruta_limpio, ruta_gastos, nombre_empresa, ruta_db, id_usuario=None):
     # nombre de empresa: prioridad al parámetro, si no la columna del archivo
     if not nombre_empresa and "empresa" in df.columns:
         nombre_empresa = str(df["empresa"].iloc[0])
+    # usuario de carga: prioridad al parámetro, si no la columna del archivo
+    if not usuario_carga and "usuario_carga" in df.columns and not df.empty:
+        usuario_carga = str(df["usuario_carga"].iloc[0])
 
     emp = obtener_o_crear_empresa(session, nombre_empresa)
     id_emp = emp.id_empresa
@@ -106,6 +110,7 @@ def cargar(ruta_limpio, ruta_gastos, nombre_empresa, ruta_db, id_usuario=None):
     carga = CargaArchivo(
         id_empresa=id_emp,
         id_usuario=id_usuario,
+        usuario_carga=usuario_carga,
         nombre_archivo=str(ruta_limpio).split("/")[-1],
         hash_archivo=hash_archivo(ruta_limpio),
         fecha_carga=datetime.utcnow(),
@@ -184,8 +189,11 @@ def cargar(ruta_limpio, ruta_gastos, nombre_empresa, ruta_db, id_usuario=None):
             t_comp=_txt(fila.get("t_comp")),
             n_comp=_txt(fila.get("n_comp")),
             f_comp=f_comp,
+            item_flexxus=_txt(fila.get("item_flexxus")),
             hash_linea=h,
             motivo_alerta=_txt(fila.get("motivo_alerta")),
+            usuario_carga=_txt(fila.get("usuario_carga")),
+            fecha_carga=_txt(fila.get("fecha_carga")),
         )
         session.add(linea)
 
@@ -234,7 +242,10 @@ def cargar(ruta_limpio, ruta_gastos, nombre_empresa, ruta_db, id_usuario=None):
                 t_comp=_txt(fila.get("t_comp")),
                 n_comp=_txt(fila.get("n_comp")),
                 f_comp=_fecha(fila.get("f_comp")),
+                item_flexxus=_txt(fila.get("item_flexxus")),
                 hash_linea=h,
+                usuario_carga=_txt(fila.get("usuario_carga")),
+                fecha_carga=_txt(fila.get("fecha_carga")),
             ))
             gastos_ok += 1
 

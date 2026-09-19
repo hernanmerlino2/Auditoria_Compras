@@ -32,6 +32,7 @@ Salida:
 """
 
 import sys
+import csv
 import argparse
 import hashlib
 import unicodedata
@@ -40,6 +41,54 @@ from pathlib import Path
 
 import openpyxl
 import pandas as pd
+
+
+# ---------------------------------------------------------------------------
+# LECTOR UNIFICADO: CSV (formato real de Flexus) o Excel (reporte interno)
+# ---------------------------------------------------------------------------
+
+def leer_filas(ruta):
+    """
+    Lee un archivo de Flexus y devuelve (header, filas) como listas de tuplas,
+    sin importar si es CSV o Excel.
+
+    - CSV: es el formato REAL que exporta Flexus. Separador ';', encoding
+      Latin-1 (típico de sistemas Windows en Argentina), decimales con coma,
+      y el encabezado en la PRIMERA fila.
+    - Excel: es el reporte interno (PDF/Excel), con el encabezado en la fila 4
+      y filas de basura (paginación, headers repetidos).
+
+    Devuelve también 'fila_header' = índice (0-based) donde está el encabezado,
+    para que el resto del proceso sepa desde dónde son datos.
+    """
+    ruta = Path(ruta)
+    ext = ruta.suffix.lower()
+
+    if ext == ".csv":
+        # Detectar encoding: primero latin-1 (lo más común en Flexus), luego utf-8
+        for enc in ("latin-1", "utf-8-sig", "cp1252"):
+            try:
+                with open(ruta, encoding=enc, newline="") as f:
+                    filas = list(csv.reader(f, delimiter=";"))
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        else:
+            raise ValueError("No se pudo leer el CSV con ningún encoding conocido.")
+        # limpiar filas vacías del final y columna vacía sobrante por ';' final
+        filas = [tuple(c for c in fila) for fila in filas if any(x.strip() for x in fila)]
+        if not filas:
+            raise ValueError("El CSV está vacío.")
+        return filas, 0   # header en la fila 0
+
+    else:  # Excel
+        wb = openpyxl.load_workbook(ruta, read_only=True, data_only=True)
+        ws = wb.active
+        filas = [tuple(fila) for fila in ws.iter_rows(values_only=True)]
+        wb.close()
+        # en el reporte interno el header está en la fila 4 (índice 3)
+        return filas, FILA_HEADER - 1
+
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +110,7 @@ COLUMNAS_BD = [
     "marca", "u_medida", "cantidad", "p_unitario", "precio_compra",
     "p_total", "peso_articulo_kg", "volumen_articulo_cm3",
     "peso_articulo_comp", "comentarios", "t_comp", "n_comp", "f_comp",
-    "cod_deposito", "desc_deposito",
+    "cod_deposito", "desc_deposito", "item_flexxus",
 ]
 
 # Mapa: nombre de columna en el export de Flexus  ->  nombre interno de BD.
@@ -91,7 +140,12 @@ MAPA_FLEXUS_A_BD = {
     "f.comp.": "f_comp",
     "codigo deposito": "cod_deposito",
     "descripcion deposito": "desc_deposito",
+    "itemflexxus": "item_flexxus",
 }
+
+# Columnas que pueden faltar sin que el archivo se rechace (según el export).
+# ITEMFLEXXUS solo viene en el CSV real de Flexus, no en el reporte interno.
+COLUMNAS_OPCIONALES = {"item_flexxus"}
 
 # Columnas que deben ser numéricas.
 COLS_NUMERICAS = [
@@ -242,15 +296,16 @@ def hash_linea(id_empresa, t_comp, n_comp, cod_articulo, f_comp,
 # VALIDACIÓN DE ESTRUCTURA
 # ---------------------------------------------------------------------------
 
-def validar_estructura(ws):
+def validar_estructura(fila_header):
     """
-    Verifica que la fila 4 contenga las 21 columnas esperadas, SIN importar
-    el orden (Flexus las exporta en orden variable). Mapea por nombre.
+    Verifica que el encabezado contenga las columnas esperadas, SIN importar
+    el orden (Flexus las exporta en orden variable) ni el formato (CSV o Excel).
+    Mapea por nombre. Recibe el encabezado ya como lista de valores.
 
     Devuelve (ok, mensaje, indice) donde 'indice' es un dict
     {nombre_bd: posicion_en_la_fila} para leer cada columna por su nombre.
     """
-    fila_header = [limpiar_texto(c.value) for c in ws[FILA_HEADER]]
+    fila_header = [limpiar_texto(c) for c in fila_header]
 
     # construir índice nombre_bd -> posición, usando nombres normalizados
     indice = {}
@@ -262,38 +317,50 @@ def validar_estructura(ws):
             indice[nombre_bd] = pos
             encontradas.add(nombre_bd)
 
-    faltantes = set(COLUMNAS_BD) - encontradas
+    # las columnas opcionales (ej. ITEMFLEXXUS) no cuentan como faltantes
+    obligatorias = set(COLUMNAS_BD) - COLUMNAS_OPCIONALES
+    faltantes = obligatorias - encontradas
     if faltantes:
-        # traducir de vuelta a nombres visibles para el mensaje
         inv = {v: k for k, v in MAPA_FLEXUS_A_BD.items()}
         visibles = sorted(inv.get(f, f) for f in faltantes)
-        msg = ("El encabezado (fila 4) NO coincide con un export de Flexus "
-               "válido.\n"
+        msg = ("El encabezado NO coincide con un export de Flexus válido.\n"
                f"   Faltan columnas: {visibles}\n")
         return False, msg, None
 
-    return True, "Estructura válida: 21 columnas reconocidas (orden flexible).", indice
+    return True, "Estructura válida: columnas reconocidas (orden y formato flexibles).", indice
 
 
 # ---------------------------------------------------------------------------
 # PROCESO PRINCIPAL
 # ---------------------------------------------------------------------------
 
-def procesar(ruta_xlsx, nombre_empresa, id_empresa):
-    ruta = Path(ruta_xlsx)
+def procesar(ruta_archivo, nombre_empresa, id_empresa, usuario_carga=None):
+    """
+    Procesa un archivo de Flexus (CSV real o Excel del reporte interno).
+    - usuario_carga: nombre del usuario que sube el archivo (queda registrado
+      en cada línea junto con la fecha/hora de carga).
+    """
+    ruta = Path(ruta_archivo)
     if not ruta.exists():
         raise FileNotFoundError(f"No existe el archivo: {ruta}")
 
-    wb = openpyxl.load_workbook(ruta, read_only=True, data_only=True)
-    ws = wb.active
+    # lector unificado: devuelve todas las filas + índice del encabezado
+    filas, idx_header = leer_filas(ruta)
+    if idx_header >= len(filas):
+        return {"ok": False, "mensaje": "El archivo no tiene encabezado legible."}
+
+    fila_header = filas[idx_header]
+    filas_datos = filas[idx_header + 1:]
 
     # --- 1. Validar estructura ANTES de tocar nada ---
-    ok, msg_val, indice = validar_estructura(ws)
+    ok, msg_val, indice = validar_estructura(fila_header)
     if not ok:
-        wb.close()
         return {"ok": False, "mensaje": msg_val}
 
-    # --- 2. Recorrer filas de datos (desde la 5) y clasificar ---
+    # fecha/hora de esta carga (una sola para todo el archivo)
+    momento_carga = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # --- 2. Recorrer filas de datos y clasificar ---
     limpias, gastos, rechazadas = [], [], []
     cont = {"header_rep": 0, "fecha_pag": 0, "vacias": 0,
             "resumen": 0, "total_leidas": 0}
@@ -306,7 +373,7 @@ def procesar(ruta_xlsx, nombre_empresa, id_empresa):
             return None
         return fila[pos]
 
-    for fila in ws.iter_rows(min_row=FILA_HEADER + 1, values_only=True):
+    for fila in filas_datos:
         cont["total_leidas"] += 1
 
         # fila totalmente vacía
@@ -345,6 +412,9 @@ def procesar(ruta_xlsx, nombre_empresa, id_empresa):
         # metadatos de control
         reg["id_empresa"] = id_empresa
         reg["empresa"] = nombre_empresa
+        # trazabilidad de carga: quién y cuándo subió este registro
+        reg["usuario_carga"] = usuario_carga
+        reg["fecha_carga"] = momento_carga
         reg["hash_linea"] = hash_linea(
             id_empresa, reg["t_comp"], reg["n_comp"],
             reg["cod_articulo"], reg["f_comp"], reg["p_unitario"],
@@ -356,8 +426,6 @@ def procesar(ruta_xlsx, nombre_empresa, id_empresa):
             gastos.append(reg)
         else:
             limpias.append(reg)
-
-    wb.close()
 
     return {
         "ok": True,

@@ -109,9 +109,15 @@ def seccion_carga(engine):
         if nombre_emp == "+ Nueva empresa":
             nombre_emp = st.text_input("Nombre de la nueva empresa")
 
-    archivo = st.file_uploader("Archivo Excel de Flexus (.xlsx)", type=["xlsx"])
+    archivo = st.file_uploader(
+        "Archivo de Flexus (.csv o .xlsx)", type=["csv", "xlsx"])
+
+    # usuario que está cargando (queda registrado en cada línea)
+    usuario_actual = st.session_state.get("auth", {}).get("nombre", "desconocido")
 
     if archivo and nombre_emp and nombre_emp != "+ Nueva empresa":
+        st.caption(f"Se registrará esta carga a nombre de **{usuario_actual}** "
+                   f"con la fecha y hora actual.")
         if st.button("🚀 Procesar y cargar", type="primary"):
             with st.spinner("Limpiando y cargando..."):
                 # guardar el archivo subido a disco temporal
@@ -122,8 +128,9 @@ def seccion_carga(engine):
                 # id de empresa: si es nueva, se creará en la carga
                 id_emp = opciones.get(nombre_emp, 0)
 
-                # FASE 1: limpiar
-                res = limpiador.procesar(ruta_tmp, nombre_emp, id_emp or 0)
+                # FASE 1: limpiar (registra usuario y fecha de carga)
+                res = limpiador.procesar(ruta_tmp, nombre_emp, id_emp or 0,
+                                         usuario_carga=usuario_actual)
                 if not res["ok"]:
                     st.error("Archivo rechazado en la validación:")
                     st.code(res["mensaje"])
@@ -136,7 +143,8 @@ def seccion_carga(engine):
                 if not ruta_limpio:
                     st.warning("No se generaron filas limpias para cargar.")
                     return
-                r = cargador_mod.cargar(ruta_limpio, ruta_gastos, nombre_emp, RUTA_DB)
+                r = cargador_mod.cargar(ruta_limpio, ruta_gastos, nombre_emp, RUTA_DB,
+                                        usuario_carga=usuario_actual)
 
             st.success("¡Carga completada!")
             c1, c2, c3, c4 = st.columns(4)
